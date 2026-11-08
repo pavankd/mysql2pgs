@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { api, formatBytes, formatNumber, type DatabaseSummary, type MySQLConn, type TableSummary } from "@/lib/api"
+import { api, formatBytes, formatNumber, plural, type DatabaseSummary, type MySQLConn, type TableSummary } from "@/lib/api"
 
 export interface DbSelection {
   checked: boolean
@@ -31,6 +31,11 @@ export function emptySelection(db: DatabaseSummary, lowercase: boolean): DbSelec
     expanded: false,
     loading: false,
   }
+}
+
+/** Check or uncheck a whole database; loaded tables follow the database's state. */
+export function withDbChecked(sel: DbSelection, checked: boolean): DbSelection {
+  return { ...sel, checked, selected: new Set(checked && sel.tables ? sel.tables.map((t) => t.name) : []) }
 }
 
 /** Selected table names, or null meaning "all tables" (also when not yet loaded). */
@@ -84,11 +89,7 @@ export function SchemaPicker({ connection, databases, loading, selection, onSele
   }
 
   function setDbChecked(name: string, checked: boolean) {
-    const sel = selection[name]
-    update(name, {
-      checked,
-      selected: new Set(checked && sel.tables ? sel.tables.map((t) => t.name) : []),
-    })
+    onSelectionChange((prev) => ({ ...prev, [name]: withDbChecked(prev[name], checked) }))
   }
 
   function setTableChecked(db: string, table: string, checked: boolean) {
@@ -105,8 +106,7 @@ export function SchemaPicker({ connection, databases, loading, selection, onSele
     onSelectionChange((prev) => {
       const next = { ...prev }
       for (const d of visible) {
-        const cur = next[d.name]
-        next[d.name] = { ...cur, checked, selected: new Set(checked && cur.tables ? cur.tables.map((t) => t.name) : []) }
+        next[d.name] = withDbChecked(next[d.name], checked)
       }
       return next
     })
@@ -169,8 +169,8 @@ export function SchemaPicker({ connection, databases, loading, selection, onSele
                     <label htmlFor={`db-${db.name}`} className="min-w-0 flex-1 cursor-pointer">
                       <div className="truncate font-medium">{db.name}</div>
                       <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-                        <span>{db.table_count} tables</span>
-                        {db.view_count > 0 && <span>{db.view_count} views</span>}
+                        <span>{plural(db.table_count, "table")}</span>
+                        {db.view_count > 0 && <span>{plural(db.view_count, "view")}</span>}
                         <span>{formatBytes(db.size_bytes)}</span>
                         <span>{db.charset}</span>
                       </div>

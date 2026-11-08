@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { CheckCircle2Icon, DatabaseIcon, Loader2Icon, PlugZapIcon, XCircleIcon } from "lucide-react"
+import { CheckCircle2Icon, DatabaseIcon, DatabasePlusIcon, Loader2Icon, PlugZapIcon, TriangleAlertIcon, XCircleIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ export type ConnState =
   | { kind: "idle" }
   | { kind: "testing" }
   | { kind: "ok"; result: TestResult }
+  | { kind: "missing"; result: TestResult }
   | { kind: "error"; message: string }
 
 interface Field<T> {
@@ -30,6 +31,8 @@ interface Props<T extends object> {
   state: ConnState
   onChange: (value: T) => void
   onTest: () => void
+  /** Shown when the test reports a missing database (PostgreSQL target). */
+  onCreateDatabase?: () => void
 }
 
 export function ConnectionCard<T extends object>({
@@ -41,6 +44,7 @@ export function ConnectionCard<T extends object>({
   state,
   onChange,
   onTest,
+  onCreateDatabase,
 }: Props<T>) {
   const [touched, setTouched] = useState(false)
   const record = value as Record<string, string | number>
@@ -97,6 +101,16 @@ export function ConnectionCard<T extends object>({
         {state.kind === "error" && (
           <p className="text-sm text-destructive break-words">{state.message}</p>
         )}
+        {state.kind === "missing" && (
+          <div className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-300">
+            <p>{state.result.note}</p>
+            {onCreateDatabase && (
+              <Button variant="outline" size="sm" className="self-start" onClick={onCreateDatabase}>
+                <DatabasePlusIcon /> Create database
+              </Button>
+            )}
+          </div>
+        )}
         {state.kind === "ok" && state.result.note && (
           <p className="text-sm text-amber-600 dark:text-amber-400">{state.result.note}</p>
         )}
@@ -111,6 +125,12 @@ function StatusBadge({ state }: { state: ConnState }) {
       return (
         <Badge variant="outline" className="border-emerald-500/40 text-emerald-700 dark:text-emerald-400">
           <CheckCircle2Icon /> v{state.result.version}
+        </Badge>
+      )
+    case "missing":
+      return (
+        <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400">
+          <TriangleAlertIcon /> Database missing
         </Badge>
       )
     case "error":

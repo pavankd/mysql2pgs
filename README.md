@@ -27,14 +27,31 @@ To migrate your own server, enter its address in the UI. The address must be rea
 
 ## Workflow
 
-1. **Connect**: test the MySQL source and PostgreSQL target.
+1. **Connect**: test the MySQL source and PostgreSQL target. Once the source connects, its schemas are listed and can be ticked straight away.
+   If the target database doesn't exist, you're prompted to create it.
 2. **Select**: choose databases or individual tables, set the target schema name, and set options.
    **Preview SQL** shows (and lets you download) the generated DDL.
 3. **Migrate**: live per-table progress, row-count verification, warnings and a log. The run can be cancelled.
+   Once it finishes, the **Test the migrated schema** console runs SQL against the target. It is read-only by default, and buttons
+   provide ready-made checks for row counts, columns, constraints, indexes, views and triggers, and identity sequences.
 
 Steps run in this order: create schemas → create tables → stream data with `COPY` → primary keys, indexes,
 identity sequences, triggers and comments → foreign keys → views → verify row counts.
 Building keys after the load keeps the copy fast. A failure in one table or index is logged and the run continues.
+
+## SQL Workbench
+
+Open **SQL Workbench** in the header (`http://localhost:8080/#/workbench`) to query any MySQL or PostgreSQL server reachable from the backend:
+
+- **Connect:** choose the engine, then enter host, port, user, password and database (optional default schema for MySQL).
+- **Navigator:** schemas and tables. Click a table to select its rows. Double-click a schema to make it the default.
+- **Execute** (Ctrl+Enter) runs the selected text, or the whole editor. Multiple `;`-separated statements each get a result tab.
+- **Cancel** stops the query on the server (PostgreSQL cancel request / MySQL `KILL QUERY`).
+- **Results** appear in a grid with row numbers, column types and NULLs. A row limit applies (100–10,000), and the full count is still reported.
+- **Output** logs every execution with its status, message and duration.
+- **Read-only** is on by default. Turn it off to run writes: MySQL commits each statement as it runs; PostgreSQL commits the script as one transaction.
+
+The default timeout is 5 minutes. Passwords are never stored in the browser.
 
 ## Type mapping
 
@@ -80,7 +97,8 @@ When the backend runs on the host, connect to `localhost:13306` and `localhost:1
 
 ## API
 
-`POST /api/mysql/test`, `POST /api/postgres/test`, `POST /api/mysql/databases`, `POST /api/mysql/tables`,
+`POST /api/mysql/test`, `POST /api/postgres/test`, `POST /api/postgres/create-database`, `POST /api/postgres/query`, `POST /api/workbench/{connect,schemas,query}`,
+`POST /api/workbench/query/{id}/cancel`, `POST /api/mysql/databases`, `POST /api/mysql/tables`,
 `POST /api/migrations/preview`, `POST /api/migrations`, `GET /api/migrations/{id}?log_after=N`,
 `POST /api/migrations/{id}/cancel`. Interactive docs are at http://localhost:8000/docs.
 

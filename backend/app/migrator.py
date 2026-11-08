@@ -29,6 +29,8 @@ class TableProgress:
     database: str
     source_table: str
     target: str
+    target_schema: str
+    target_table: str
     status: str = "pending"  # pending | creating | copying | indexing | done | failed
     row_estimate: int = 0
     rows_copied: int = 0
@@ -225,7 +227,8 @@ def run_job(job: Job) -> None:
             for tp in plan.tables:
                 job.tables[tp.key] = TableProgress(
                     key=tp.key, database=tp.database, source_table=tp.source_table,
-                    target=f"{tp.schema}.{tp.name}", row_estimate=tp.row_estimate,
+                    target=f"{tp.schema}.{tp.name}", target_schema=tp.schema, target_table=tp.name,
+                    row_estimate=tp.row_estimate,
                 )
         job.log("info", f"Plan ready: {len(plan.tables)} table(s), {len(plan.fk_steps)} foreign key(s), {len(plan.view_steps)} view(s)")
         for w in plan.warnings:

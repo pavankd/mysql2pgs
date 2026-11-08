@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { QueryConsole } from "@/components/query-console"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,12 +27,13 @@ import {
   type JobStatus,
   type LogEntry,
   type MigrationSnapshot,
+  type PGConn,
   type TableProgress,
 } from "@/lib/api"
 
 const FINISHED: JobStatus[] = ["completed", "completed_with_errors", "failed", "cancelled"]
 
-export function MigrationMonitor({ jobId, onReset }: { jobId: string; onReset: () => void }) {
+export function MigrationMonitor({ jobId, target, onReset }: { jobId: string; target: PGConn; onReset: () => void }) {
   const [snap, setSnap] = useState<MigrationSnapshot | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [logFilter, setLogFilter] = useState<"all" | "problems">("all")
@@ -151,6 +153,15 @@ export function MigrationMonitor({ jobId, onReset }: { jobId: string; onReset: (
           )}
         </CardContent>
       </Card>
+
+      {(snap.status === "completed" || snap.status === "completed_with_errors") && (
+        <QueryConsole
+          connection={target}
+          tables={snap.tables
+            .filter((t) => t.status === "done")
+            .map((t) => ({ schema: t.target_schema, table: t.target_table }))}
+        />
+      )}
 
       <Card>
         <CardHeader>

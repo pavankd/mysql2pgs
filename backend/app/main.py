@@ -7,10 +7,12 @@ import pymysql
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import mysql_connect, mysql_version, pg_version
+from .db import mysql_connect, mysql_version, pg_create_database, pg_probe
 from .introspect import list_databases, list_tables
 from .migrator import jobs, make_plan
-from .models import MigrationRequest, MySQLConn, PGConn, TablesRequest
+from . import workbench
+from .models import MigrationRequest, MySQLConn, PGConn, QueryRequest, TablesRequest, WorkbenchConn, WorkbenchQuery
+from .query import QueryCancelled, describe_error, run_query, running
 
 app = FastAPI(title="mysql2pgs", version="1.0.0", description="Migrate MySQL 5.6 databases to PostgreSQL")
 
@@ -48,8 +50,36 @@ def test_mysql(conn: MySQLConn):
 
 @app.post("/api/postgres/test")
 def test_postgres(conn: PGConn):
+    """200 with ok=false + database_missing=true when only the target database is absent."""
     try:
-        return {"ok": True, "version": pg_version(conn), "note": None}
+        return pg_probe(conn)
+    except DB_ERRORS as e:
+        raise _fail(e)
+
+
+@app.post("/api/postgres/create-database")
+def create_postgres_database(conn: PGConn):
+    name = conn.database.strip()
+    if not name:
+        raise HTTPException(400, detail="Database name is required")
+    if len(name.encode()) > 63:
+        raise HTTPException(400, detail="Database name must be at most 63 bytes")
+    try:
+        return pg_create_database(conn.model_copy(update={"database": name}))
+    except DB_ERRORS as e:
+        raise _fail(e)
+
+
+@app.post("/api/postgres/query")
+def query_postgres(req: QueryRequest):
+    if not req.sql.strip():
+        raise HTTPException(400, detail="Query is empty")
+    try:
+        return run_query(req)
+    except QueryCancelled as e:
+        raise HTTPException(409, detail=e.reason)
+    except psycopg.Error as e:
+        raise HTTPException(400, detail=describe_error(e))
     except DB_ERRORS as e:
         raise _fail(e)
 
@@ -113,3 +143,41 @@ def cancel_migration(job_id: str):
         raise HTTPException(404, detail="Migration not found")
     job.cancel_event.set()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# SQL Workbench
+# ---------------------------------------------------------------------------
+
+@app.post("/api/workbench/connect")
+def workbench_connect(conn: WorkbenchConn):
+    try:
+        return workbench.test_connection(conn)
+    except DB_ERRORS as e:
+        raise HTTPException(400, detail=describe_error(e))
+
+
+@app.post("/api/workbench/schemas")
+def workbench_schemas(conn: WorkbenchConn):
+    try:
+        return workbench.schema_tree(conn)
+    except DB_ERRORS as e:
+        raise HTTPException(400, detail=describe_error(e))
+
+
+@app.post("/api/workbench/query")
+def workbench_query(q: WorkbenchQuery):
+    if not q.sql.strip():
+        raise HTTPException(400, detail="Query is empty")
+    try:
+        return workbench.execute(q)
+    except QueryCancelled as e:
+        raise HTTPException(409, detail=e.reason)
+    except DB_ERRORS as e:
+        raise HTTPException(400, detail=describe_error(e))
+
+
+@app.post("/api/workbench/query/{query_id}/cancel")
+def workbench_cancel(query_id: str):
+    """Cancel a running query. ``running: false`` means it had not started or already finished."""
+    return {"ok": True, "running": running.cancel(query_id)}
