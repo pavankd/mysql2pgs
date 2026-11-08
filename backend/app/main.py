@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import os
+
+import psycopg
+import pymysql
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from .db import mysql_connect, mysql_version, pg_version
+from .introspect import list_databases, list_tables
+from .migrator import jobs, make_plan
+from .models import MigrationRequest, MySQLConn, PGConn, TablesRequest
+
+app = FastAPI(title="mysql2pgs", version="1.0.0", description="Migrate MySQL 5.6 databases to PostgreSQL")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+DB_ERRORS = (pymysql.Error, psycopg.Error, OSError)
+
+
+def _fail(e: Exception) -> HTTPException:
+    if isinstance(e, pymysql.err.OperationalError) and len(e.args) >= 2:
+        return HTTPException(400, detail=str(e.args[1]))
+    return HTTPException(400, detail=str(e).strip().splitlines()[0] if str(e).strip() else repr(e))
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/api/mysql/test")
+def test_mysql(conn: MySQLConn):
+    try:
+        version = mysql_version(conn)
+    except DB_ERRORS as e:
+        raise _fail(e)
+    major_minor = ".".join(version.split(".")[:2])
+    note = None if major_minor == "5.6" else f"Tool is designed for MySQL 5.6; server reports {version}."
+    return {"ok": True, "version": version, "note": note}
+
+
+@app.post("/api/postgres/test")
+def test_postgres(conn: PGConn):
+    try:
+        return {"ok": True, "version": pg_version(conn), "note": None}
+    except DB_ERRORS as e:
+        raise _fail(e)
+
+
+@app.post("/api/mysql/databases")
+def databases(conn: MySQLConn):
+    try:
+        c = mysql_connect(conn)
+        try:
+            return list_databases(c)
+        finally:
+            c.close()
+    except DB_ERRORS as e:
+        raise _fail(e)
+
+
+@app.post("/api/mysql/tables")
+def tables(req: TablesRequest):
+    try:
+        c = mysql_connect(req.connection)
+        try:
+            return list_tables(c, req.database)
+        finally:
+            c.close()
+    except DB_ERRORS as e:
+        raise _fail(e)
+
+
+@app.post("/api/migrations/preview")
+def preview(req: MigrationRequest):
+    try:
+        plan = make_plan(req)
+    except DB_ERRORS as e:
+        raise _fail(e)
+    return {"sql": plan.to_sql(), "warnings": plan.warnings, "table_count": len(plan.tables)}
+
+
+@app.post("/api/migrations", status_code=202)
+def start_migration(req: MigrationRequest):
+    job = jobs.create(req)
+    return {"id": job.id}
+
+
+@app.get("/api/migrations")
+def list_migrations():
+    return [j.summary() for j in jobs.all()]
+
+
+@app.get("/api/migrations/{job_id}")
+def get_migration(job_id: str, log_after: int = 0):
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail="Migration not found")
+    return job.snapshot(log_after)
+
+
+@app.post("/api/migrations/{job_id}/cancel")
+def cancel_migration(job_id: str):
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail="Migration not found")
+    job.cancel_event.set()
+    return {"ok": True}

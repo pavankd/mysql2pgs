@@ -1,0 +1,115 @@
+import datetime as dt
+
+from app.introspect import Column, DatabaseInfo, ForeignKey, Index, Table, View
+from app.models import MigrationOptions
+from app.planner import build_plan, short_name, translate_view_sql
+from app.typemap import map_column, parse_enum_values
+
+
+def col(name, data_type, column_type, *, nullable=True, default=None, extra="", **kw):
+    return Column(
+        name=name, position=1, default=default, nullable=nullable, data_type=data_type,
+        char_length=kw.get("char_length"), num_precision=kw.get("num_precision"),
+        num_scale=kw.get("num_scale"), dt_precision=kw.get("dt_precision"),
+        column_type=column_type, extra=extra, comment=kw.get("comment", ""),
+    )
+
+
+def test_integer_mapping():
+    assert map_column(col("a", "int", "int(11) unsigned"), "a", True).pg_type == "bigint"
+    assert map_column(col("a", "bigint", "bigint(20) unsigned"), "a", True).pg_type == "bigint"
+    m = map_column(col("a", "bigint", "bigint(20) unsigned", extra="auto_increment"), "a", True)
+    assert m.pg_type == "bigint" and m.identity
+    assert map_column(col("a", "tinyint", "tinyint(1)"), "a", True).pg_type == "boolean"
+    assert map_column(col("a", "tinyint", "tinyint(1)"), "a", False).pg_type == "smallint"
+
+
+def test_bool_conversion_and_default():
+    m = map_column(col("a", "tinyint", "tinyint(1)", default="1"), "a", True)
+    assert m.default_sql == "true"
+    assert m.converter(0) is False and m.converter(2) is True and m.converter(None) is None
+    b = map_column(col("b", "bit", "bit(1)", default="b'0'", num_precision=1), "b", True)
+    assert b.pg_type == "boolean" and b.default_sql == "false" and b.converter(b"\x01") is True
+
+
+def test_bits():
+    m = map_column(col("a", "bit", "bit(5)", default="b'101'", num_precision=5), "a", True)
+    assert m.pg_type == "bit(5)" and m.default_sql == "B'00101'"
+    assert m.converter(b"\x05") == "00101"
+
+
+def test_temporal():
+    m = map_column(col("a", "datetime", "datetime", default="0000-00-00 00:00:00"), "a", True)
+    assert m.pg_type == "timestamp(0)" and m.default_sql is None
+    assert m.converter("0000-00-00 00:00:00") is None
+    nn = map_column(col("a", "date", "date", nullable=False), "a", True)
+    assert nn.converter("0000-00-00") == "-infinity"
+    ts = map_column(col("a", "timestamp", "timestamp", default="CURRENT_TIMESTAMP",
+                        extra="on update current_timestamp"), "a", True)
+    assert ts.pg_type == "timestamptz(0)" and ts.default_sql == "CURRENT_TIMESTAMP"
+    assert ts.on_update_current_timestamp
+    t = map_column(col("a", "time", "time"), "a", True)
+    assert t.converter(dt.timedelta(hours=1, minutes=2)) == dt.time(1, 2)
+
+
+def test_enum():
+    assert parse_enum_values("enum('a','it''s','c')") == ["a", "it's", "c"]
+    m = map_column(col("s", "enum", "enum('new','paid')", default="new"), "s", True)
+    assert m.pg_type == "text" and m.default_sql == "'new'"
+    assert m.check_sql == "CHECK (\"s\" IN ('new', 'paid', ''))"
+
+
+def test_string_nul_stripped():
+    m = map_column(col("a", "varchar", "varchar(10)", char_length=10), "a", True)
+    assert m.pg_type == "varchar(10)" and m.converter("a\x00b") == "ab"
+
+
+def test_short_name():
+    long = short_name("x" * 40, "y" * 40)
+    assert len(long) == 63
+    assert short_name("t", "idx") == "t_idx"
+
+
+def test_view_translation():
+    sql = translate_view_sql(
+        "select `shop`.`Orders`.`id` AS `id`,ifnull(`shop`.`Orders`.`note`,_utf8mb4'x') AS `n` from `shop`.`Orders`",
+        {"shop": "shop_pg"}, MigrationOptions(),
+    )
+    assert sql == ('select "shop_pg"."orders"."id" AS "id",coalesce("shop_pg"."orders"."note",\'x\') AS "n" '
+                   'from "shop_pg"."orders"')
+
+
+def test_build_plan():
+    customers = Table("Customers", "people", 10, [
+        col("id", "int", "int(11)", nullable=False, extra="auto_increment"),
+        col("email", "varchar", "varchar(191)", char_length=191),
+        col("bio", "text", "text"),
+    ], [Index("PRIMARY", True, "BTREE", [("id", None)]),
+        Index("uq_email", True, "BTREE", [("email", None)]),
+        Index("ft_bio", False, "FULLTEXT", [("bio", None)]),
+        Index("ix_bio", False, "BTREE", [("bio", 20)])])
+    orders = Table("orders", "", 5, [
+        col("id", "int", "int(11)", nullable=False, extra="auto_increment"),
+        col("customer_id", "int", "int(11)"),
+    ], [Index("PRIMARY", True, "BTREE", [("id", None)])],
+        [ForeignKey("fk_c", ["customer_id"], "shop", "Customers", ["id"], "CASCADE", "RESTRICT"),
+         ForeignKey("fk_x", ["customer_id"], "other", "t", ["id"], "CASCADE", "CASCADE")])
+    db = DatabaseInfo("shop", [customers, orders], [View("v", "select 1 AS `x`")], 2, 0)
+    plan = build_plan([(db, "shop")], MigrationOptions(drop_existing=True))
+
+    assert [s.sql for s in plan.schema_steps] == ['DROP SCHEMA IF EXISTS "shop" CASCADE', 'CREATE SCHEMA IF NOT EXISTS "shop"']
+    c = plan.tables[0]
+    assert c.name == "customers"
+    assert '"id" integer GENERATED BY DEFAULT AS IDENTITY NOT NULL' in c.create_sql
+    sqls = [s.sql for s in c.post_steps]
+    assert 'ALTER TABLE "shop"."customers" ADD CONSTRAINT "customers_pkey" PRIMARY KEY ("id")' == sqls[0]
+    assert any("USING gin (to_tsvector('simple', coalesce(\"bio\", '')))" in s for s in sqls)
+    prefix = next(s for s in c.post_steps if "ix_bio" in s.label)
+    assert prefix.fallback_sql.endswith('(left("bio", 20)))')
+    assert any("pg_get_serial_sequence" in s for s in sqls)
+    assert any(s.startswith('COMMENT ON TABLE "shop"."customers"') for s in sqls)
+    assert len(plan.fk_steps) == 1 and 'REFERENCES "shop"."customers" ("id") ON UPDATE CASCADE ON DELETE RESTRICT' in plan.fk_steps[0].sql
+    assert any("fk_x skipped" in w for w in plan.warnings)
+    assert any("stored routine" in w for w in plan.warnings)
+    assert plan.view_steps[0].sql == 'CREATE OR REPLACE VIEW "shop"."v" AS select 1 AS "x"'
+    assert "CREATE TABLE" in plan.to_sql()
