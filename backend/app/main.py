@@ -2,16 +2,31 @@ from __future__ import annotations
 
 import os
 
+import oracledb
 import psycopg
+import pymssql
 import pymysql
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import mysql_connect, mysql_version, pg_create_database, pg_probe
 from .introspect import list_databases, list_tables
 from .migrator import jobs, make_plan
 from . import workbench
-from .models import MigrationRequest, MySQLConn, PGConn, QueryRequest, TablesRequest, WorkbenchConn, WorkbenchQuery
+from .dumper import service as dump_service
+from .dumper.base import DUMP_ROOT_DISPLAY, DumpError, dump_jobs
+from .models import (
+    DumpConn,
+    DumpRequest,
+    MigrationRequest,
+    MySQLConn,
+    PGConn,
+    QueryRequest,
+    TablesRequest,
+    WorkbenchConn,
+    WorkbenchQuery,
+)
 from .query import QueryCancelled, describe_error, run_query, running
 
 app = FastAPI(title="mysql2pgs", version="1.0.0", description="Migrate MySQL 5.6 databases to PostgreSQL")
@@ -181,3 +196,81 @@ def workbench_query(q: WorkbenchQuery):
 def workbench_cancel(query_id: str):
     """Cancel a running query. ``running: false`` means it had not started or already finished."""
     return {"ok": True, "running": running.cancel(query_id)}
+
+
+# ---------------------------------------------------------------------------
+# Schema Dump
+# ---------------------------------------------------------------------------
+
+DUMP_DB_ERRORS = (pymysql.Error, psycopg.Error, oracledb.Error, pymssql.Error, OSError)
+
+
+def _dump_db_error(e: Exception) -> HTTPException:
+    if isinstance(e, pymssql.Error) and e.args:
+        # pymssql packs (code, b"message ... DB-Lib error ...") into args[0]
+        first = e.args[0]
+        if isinstance(first, tuple) and len(first) >= 2:
+            msg = first[1].decode("utf-8", "replace") if isinstance(first[1], bytes) else str(first[1])
+            return HTTPException(400, detail=msg.split("DB-Lib error")[0].strip() or str(e))
+    if isinstance(e, oracledb.Error):
+        # e.g. "DPY-6005: cannot connect ... DPY-6001: Service "X" is not registered ..." -
+        # the useful cause is on the later lines.
+        lines = [l.strip() for l in str(e).strip().splitlines() if l.strip() and not l.strip().startswith("Help:")]
+        return HTTPException(400, detail=" ".join(lines)[:500])
+    return HTTPException(400, detail=describe_error(e))
+
+
+@app.get("/api/dump/config")
+def dump_config():
+    return {"root": DUMP_ROOT_DISPLAY}
+
+
+@app.post("/api/dump/connect")
+def dump_connect(conn: DumpConn):
+    """Connect, then list schemas with what this user may dump (schema DDL / data)."""
+    try:
+        return dump_service.inspect(conn)
+    except DumpError as e:
+        raise HTTPException(400, detail=str(e))
+    except DUMP_DB_ERRORS as e:
+        raise _dump_db_error(e)
+
+
+@app.post("/api/dump/jobs", status_code=202)
+def dump_start(req: DumpRequest):
+    try:
+        job = dump_service.start(req)
+    except dump_service.DumpExists as e:
+        raise HTTPException(409, detail=str(e))
+    except DumpError as e:
+        raise HTTPException(400, detail=str(e))
+    except DUMP_DB_ERRORS as e:
+        raise _dump_db_error(e)
+    return {"id": job.id}
+
+
+@app.get("/api/dump/jobs/{job_id}")
+def dump_status(job_id: str, log_after: int = 0):
+    job = dump_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail="Dump job not found")
+    return job.snapshot(log_after)
+
+
+@app.post("/api/dump/jobs/{job_id}/cancel")
+def dump_cancel(job_id: str):
+    job = dump_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail="Dump job not found")
+    job.cancel_event.set()
+    return {"ok": True}
+
+
+@app.get("/api/dump/jobs/{job_id}/download")
+def dump_download(job_id: str):
+    job = dump_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail="Dump job not found")
+    if job.status != "completed" or not job.target.is_file():
+        raise HTTPException(409, detail="The dump file is not available")
+    return FileResponse(job.target, media_type="application/sql", filename=job.target.name)

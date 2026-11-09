@@ -91,3 +91,26 @@ class WorkbenchQuery(BaseModel):
     read_only: bool = True
     max_rows: int = Field(1000, ge=1, le=50_000)
     timeout_ms: int = Field(300_000, ge=1_000, le=3_600_000)
+
+
+class DumpConn(BaseModel):
+    """Server for the Schema Dump page."""
+
+    engine: Literal["mysql", "postgres", "oracle", "mssql"]
+    host: str
+    port: int
+    user: str
+    password: str = ""
+    # PostgreSQL / SQL Server: database. Oracle: service name. MySQL: unused.
+    database: str = ""
+
+
+class DumpRequest(BaseModel):
+    connection: DumpConn
+    schemas: list[str] = Field(min_length=1)
+    content: Literal["schema", "data", "both"] = "both"
+    # MySQL: CREATE DATABASE; PostgreSQL / SQL Server: CREATE SCHEMA; Oracle: CREATE USER.
+    include_create_schema: bool = True
+    # Relative to the dumps folder (DUMP_ROOT); cannot escape it.
+    output_path: str = Field(min_length=1, max_length=512)
+    overwrite: bool = False

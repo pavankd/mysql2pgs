@@ -37,6 +37,12 @@ MigrationRequest  = { source: MySQLConn, target: PGConn, databases: DatabaseSele
 | `POST /workbench/schemas` | WorkbenchConn | `[{name, tables: [{name, type: "table"\|"view"}], truncated}]`, without system schemas; at most 2000 objects per schema |
 | `POST /workbench/query` | WorkbenchQuery | QueryResponse; 409 if cancelled or timed out |
 | `POST /workbench/query/{query_id}/cancel` | n/a | `{ok: true, running}`. `running: false` means the query had not registered yet (the cancel is still applied when it does) or had already finished. |
+| `GET /dump/config` | n/a | `{root}`: how the dumps folder is shown to users (e.g. `./dumps`) |
+| `POST /dump/connect` | DumpConn | DumpServerInfo: version, user, notes, and per schema `{name, tables, views, routines, can_dump_schema, can_dump_data, schema_issues[], data_issues[], notes[]}` |
+| `POST /dump/jobs` | DumpRequest | `202 {id}`. 400 if the path is invalid, a schema is unknown, or the permission check fails (re-run server-side). 409 if the file exists and `overwrite` is false. |
+| `GET /dump/jobs/{id}?log_after=N` | n/a | DumpJobStatus `{id, status: pending\|running\|completed\|failed\|cancelled, phase, current, items_done, items_total, rows, bytes_written, file_size, output_path, engine, schemas, content, include_create_schema, error, warning_count, logs}` |
+| `POST /dump/jobs/{id}/cancel` | n/a | `{ok: true}`; the partial file is deleted |
+| `GET /dump/jobs/{id}/download` | n/a | the finished file (`application/sql`); 409 unless completed |
 | `POST /mysql/databases` | MySQLConn | `[{name, charset, table_count, view_count, size_bytes}]`, without system schemas |
 | `POST /mysql/tables` | `{connection: MySQLConn, database}` | `[{name, type: "table"\|"view", engine, row_estimate, size_bytes}]` |
 | `POST /migrations/preview` | MigrationRequest | `{sql, warnings[], table_count}`; nothing is executed |
@@ -58,6 +64,9 @@ TableProgress = { key: "db.table", database, source_table, target: "schema.table
   status: "pending"|"creating"|"copying"|"indexing"|"done"|"failed",
   row_estimate, rows_copied, source_rows|null, target_rows|null, error|null, seconds }
 LogEntry = { seq, ts, level: "info"|"warning"|"error"|"debug", message }
+
+DumpConn    = { engine: "mysql"|"postgres"|"oracle"|"mssql", host, port, user, password, database /* PG/MSSQL db, Oracle service name */ }
+DumpRequest = { connection: DumpConn, schemas: string[] /* min 1 */, content: "schema"|"data"|"both", include_create_schema, output_path /* relative to the dumps folder */, overwrite }
 
 WorkbenchConn  = { engine: "mysql"|"postgres", host, port, user, password, database /* MySQL: optional default schema; PG: db, "postgres" if empty */ }
 WorkbenchQuery = { connection: WorkbenchConn, sql, query_id /* [A-Za-z0-9_-]{8,64}, chosen by the client */,

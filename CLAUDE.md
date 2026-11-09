@@ -9,6 +9,7 @@ A web app that migrates MySQL 5.6 databases (schema and data) into PostgreSQL 18
 Before changing behaviour, read the specs in `docs/specs/`. They are the contract the code is expected to follow:
 - `docs/specs/architecture.md`: components, request flow, job lifecycle.
 - `docs/specs/migration.md`: execution order, type and value mapping rules, invariants, error handling.
+- `docs/specs/schema-dump.md`: Schema Dump permission rules, per-engine dump method, ordering and value-fidelity rules.
 - `docs/specs/api.md`: the HTTP contract shared by `backend/app/main.py` and `frontend/src/lib/api.ts`.
 
 If you change behaviour, update the matching spec and the README type-mapping table in the same change.
@@ -41,7 +42,11 @@ docker compose up -d --build backend         # rebuild after backend changes (co
 docker compose exec -T postgres psql -U postgres -d migrated     # inspect migrated data
 docker compose exec -T mysql mysql -uroot -pmysql shop           # inspect source data
 docker compose down -v                       # reset; MySQL re-seeds from docker/mysql/init on next start
+docker compose --profile oracle up -d        # optional Oracle Free test server (seeded from docker/oracle/init)
+docker compose --profile mssql up -d         # optional SQL Server 2022 (seeded by the mssql-init service)
 ```
+
+Dump files land in `./dumps` (mounted at `/dumps`; the backend runs as UID 1000). Schema Dump changes need a **restore round-trip** on the affected engine (see the spec's "Verification standard").
 
 The unit tests only cover pure planning and type-mapping logic. Changes to introspection, COPY or execution need an end-to-end check against the compose databases: `POST /api/migrations` with `drop_existing: true`, poll `GET /api/migrations/{id}`, then compare values in psql. The seed in `docker/mysql/init/01-sample.sql` deliberately covers edge cases. Add a case there when you add a mapping rule.
 
@@ -73,6 +78,7 @@ Connection defaults in the UI (`mysql:3306`, `postgres:5432`) are hostnames reso
 - TypeScript 7: `baseUrl` is not supported. `paths` in tsconfig resolve relative to the config file.
 - Vite 8: use `import.meta.dirname`, not `__dirname`, in `vite.config.ts`.
 - Effects must use a block body when calling scroll APIs: `useEffect(() => { el.scrollIntoView() })`. Current browsers return a Promise from scroll methods, and React crashes ("is not a function") if an effect returns a non-function.
+- zsh doesn't word-split variables: use a shell function, not `CMD="docker compose exec …"; $CMD`. Otherwise every call fails and a diff of two empty outputs looks like "identical".
 - psycopg 3 binds a Python list as an array, not an IN list: use `= ANY(%s)` / `<> ALL(%s)`.
 - Tailwind v4 is configured in CSS (`src/index.css`); there is no `tailwind.config.js`.
 - The `mysql:5.6` image is amd64-only (`platform: linux/amd64` in compose).

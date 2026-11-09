@@ -38,6 +38,13 @@ services:
 
   backend:
     build: ./backend
+    # Run as your user so dump files in ./dumps are owned by you, not root.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      DUMP_ROOT: /dumps
+      DUMP_ROOT_DISPLAY: ./dumps
+    volumes:
+      - ./dumps:/dumps
     ports:
       - "8000:8000"
     depends_on:
@@ -52,6 +59,54 @@ services:
       - "8080:80"
     depends_on:
       - backend
+
+  # Optional test servers for the Schema Dump page (heavy; start on demand):
+  #   docker compose --profile oracle up -d     # Oracle Free 23ai, service FREEPDB1
+  #   docker compose --profile mssql up -d      # SQL Server 2022 Developer
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    profiles: ["oracle"]
+    environment:
+      ORACLE_PASSWORD: oracle
+      APP_USER: shop
+      APP_USER_PASSWORD: shop
+    ports:
+      - "11521:1521"
+    volumes:
+      - ./docker/oracle/init:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    profiles: ["mssql"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Mssql_pass1"
+      MSSQL_PID: Developer
+    ports:
+      - "11433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    profiles: ["mssql"]
+    depends_on:
+      mssql:
+        condition: service_healthy
+    volumes:
+      - ./docker/mssql/init:/init:ro
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd", "-C", "-S", "mssql", "-U", "sa", "-P", "Mssql_pass1", "-I", "-b", "-i", "/init/01-sample.sql"]
+    restart: "no"
 
 volumes:
   mysql-data:

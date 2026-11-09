@@ -53,6 +53,32 @@ Open **SQL Workbench** in the header (`http://localhost:8080/#/workbench`) to qu
 
 The default timeout is 5 minutes. Passwords are never stored in the browser.
 
+## Schema Dump
+
+**Schema Dump** in the header (`http://localhost:8080/#/dump`) writes selected schemas of a server to **one SQL file**:
+
+- **Server types:** MySQL / MariaDB, PostgreSQL, Oracle (service name, e.g. `FREEPDB1`), SQL Server (database).
+- **Permission check:** runs on connect. Each schema shows whether this login may dump its **schema** and its **data**, and why not if it can't. The check runs again on the server before a dump starts.
+- **Options:** pick schemas, then **Schema + data**, **Schema only** or **Data only**, and whether to **include CREATE SCHEMA** (CREATE DATABASE on MySQL, CREATE USER on Oracle).
+- **Save as:** a path under `./dumps` (sub-folders allowed; nothing outside that folder). Existing files need "Overwrite". When the dump finishes there's a **Download** button. Failed or cancelled dumps leave no file.
+
+| Engine | How it's dumped | Restore with |
+|---|---|---|
+| MySQL / MariaDB | `SHOW CREATE …` statements, consistent snapshot | `mysql < dump.sql` |
+| PostgreSQL | `pg_dump` 18 | `psql -f dump.sql` |
+| Oracle | `DBMS_METADATA` + INSERTs | SQL\*Plus / SQLcl `@dump.sql` |
+| SQL Server | generated from catalog views + INSERTs | `sqlcmd -i dump.sql` |
+
+Each engine was verified by restoring its dump into an empty server and comparing every value with the source.
+Details: `docs/specs/schema-dump.md`.
+
+Oracle and SQL Server test servers are optional (they are large), and start on demand:
+
+```bash
+docker compose --profile oracle up -d   # oracle:1521, service FREEPDB1, system/oracle; schemas SHOP, HR
+docker compose --profile mssql up -d    # mssql:1433, sa / Mssql_pass1; database shop (schemas sales, hr, dbo)
+```
+
 ## Type mapping
 
 | MySQL | PostgreSQL |
@@ -98,7 +124,7 @@ When the backend runs on the host, connect to `localhost:13306` and `localhost:1
 ## API
 
 `POST /api/mysql/test`, `POST /api/postgres/test`, `POST /api/postgres/create-database`, `POST /api/postgres/query`, `POST /api/workbench/{connect,schemas,query}`,
-`POST /api/workbench/query/{id}/cancel`, `POST /api/mysql/databases`, `POST /api/mysql/tables`,
+`POST /api/workbench/query/{id}/cancel`, `POST /api/dump/{connect,jobs}`, `GET /api/dump/jobs/{id}[/download]`, `POST /api/mysql/databases`, `POST /api/mysql/tables`,
 `POST /api/migrations/preview`, `POST /api/migrations`, `GET /api/migrations/{id}?log_after=N`,
 `POST /api/migrations/{id}/cancel`. Interactive docs are at http://localhost:8000/docs.
 

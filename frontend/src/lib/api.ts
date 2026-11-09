@@ -159,6 +159,73 @@ export interface SchemaNode {
   truncated: boolean
 }
 
+export type DumpEngine = "mysql" | "postgres" | "oracle" | "mssql"
+
+export interface DumpConn {
+  engine: DumpEngine
+  host: string
+  port: number
+  user: string
+  password: string
+  /** PostgreSQL / SQL Server: database. Oracle: service name. MySQL: unused. */
+  database: string
+}
+
+export interface DumpSchemaInfo {
+  name: string
+  tables: number
+  views: number
+  routines: number
+  can_dump_schema: boolean
+  can_dump_data: boolean
+  schema_issues: string[]
+  data_issues: string[]
+  notes: string[]
+}
+
+export interface DumpServerInfo {
+  engine: DumpEngine
+  version: string
+  user: string
+  database?: string
+  schemas: DumpSchemaInfo[]
+  notes: string[]
+}
+
+export type DumpContent = "schema" | "data" | "both"
+
+export interface DumpRequest {
+  connection: DumpConn
+  schemas: string[]
+  content: DumpContent
+  include_create_schema: boolean
+  output_path: string
+  overwrite: boolean
+}
+
+export interface DumpJobStatus {
+  id: string
+  status: "pending" | "running" | "completed" | "failed" | "cancelled"
+  phase: string
+  current: string
+  items_done: number
+  items_total: number
+  rows: number
+  bytes_written: number
+  file_size: number | null
+  output_path: string
+  engine: DumpEngine
+  schemas: string[]
+  content: DumpContent
+  include_create_schema: boolean
+  error: string | null
+  warning_count: number
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+  logs: LogEntry[]
+}
+
 /** Error from the API, with the HTTP status (409 = query cancelled). */
 export class ApiError extends Error {
   status: number
@@ -224,6 +291,14 @@ export const api = {
       max_rows: number
     }) => request<QueryResponse>("POST", "/workbench/query", body),
     cancel: (queryId: string) => request<{ ok: boolean; running: boolean }>("POST", `/workbench/query/${queryId}/cancel`),
+  },
+  dump: {
+    config: () => request<{ root: string }>("GET", "/dump/config"),
+    connect: (c: DumpConn) => request<DumpServerInfo>("POST", "/dump/connect", c),
+    start: (r: DumpRequest) => request<{ id: string }>("POST", "/dump/jobs", r),
+    status: (id: string, logAfter: number) => request<DumpJobStatus>("GET", `/dump/jobs/${id}?log_after=${logAfter}`),
+    cancel: (id: string) => request<{ ok: boolean }>("POST", `/dump/jobs/${id}/cancel`),
+    downloadUrl: (id: string) => `/api/dump/jobs/${id}/download`,
   },
   createPostgresDatabase: (c: PGConn) => request<CreateDatabaseResult>("POST", "/postgres/create-database", c),
   databases: (c: MySQLConn) => request<DatabaseSummary[]>("POST", "/mysql/databases", c),

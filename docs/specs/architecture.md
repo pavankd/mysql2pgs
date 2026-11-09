@@ -26,6 +26,7 @@ Browser ──► frontend (nginx :80, host :8080)
 | `migrator.py` | Job store, background execution, progress and logs | build SQL by hand that belongs in the planner |
 | `query.py` | Ad-hoc SQL on either engine (`run_postgres`, `run_mysql`): read-only guard, timeout, row cap, JSON-safe values, and the `running` cancellation registry. Shared by the migration console and the workbench. | be used by the migration pipeline |
 | `workbench.py` | SQL Workbench: connect probe, schema tree, dispatch to `run_mysql`/`run_postgres` | hold query execution logic |
+| `dumper/` | Schema Dump: `base.py` (output paths, `.partial` writer, jobs), `mysql.py`, `postgres.py`, `oracle.py`, `mssql.py` (each `inspect()` + `dump()`), `service.py` (dispatch and the server-side permission re-check). See `docs/specs/schema-dump.md`. | write outside `DUMP_ROOT` |
 | `main.py` | HTTP routes; map driver errors to `400 {detail}` | hold business logic |
 
 `make_plan(request)` is the only way a plan is produced. Both `/migrations/preview` and job execution call it, so the previewed SQL is the SQL that runs, apart from the data COPY.
@@ -57,7 +58,7 @@ pending → running → completed | completed_with_errors | failed | cancelled
 
 ## Frontend structure
 
-- `App.tsx` `Shell` owns the header and navigation, with hash routes `#/` (Migrate) and `#/workbench` (SQL Workbench). Both pages stay mounted and the inactive one is `hidden`, so switching never loses a running migration's monitor or a workbench draft.
+- `App.tsx` `Shell` owns the header and navigation, with hash routes `#/` (Migrate), `#/workbench` (SQL Workbench) and `#/dump` (Schema Dump). Both pages stay mounted and the inactive one is `hidden`, so switching never loses a running migration's monitor or a workbench draft.
 - **SQL Workbench** (`pages/workbench.tsx`, `components/workbench/navigator.tsx`):
   - The connection bar takes the engine, host, port, user, password and database.
   - The Navigator tree lists schemas and tables. Clicking a table runs `SELECT * … LIMIT <row limit>`. Double-clicking a schema (or "use") sets it as the default schema. The tree is keyed by connection, so nothing carries over between servers.
@@ -66,6 +67,7 @@ pending → running → completed | completed_with_errors | failed | cancelled
   - Results show one tab per result-set statement, plus an Output tab logging each run (ok / error / cancelled, with duration).
   - `current_schema` from each response becomes the next default schema, so `USE x` carries over even though every execution uses a new connection.
   - The connection (without password), draft SQL, limit, read-only flag and default schema are kept in `localStorage` (`m2p.workbench`).
+- **Schema Dump** (`pages/schema-dump.tsx`, route `#/dump`): connect (with per-engine defaults and field labels), then a schema table with per-schema "Schema dump" / "Data dump" permission badges (issues in tooltips; a schema allowed for neither can't be ticked), then options (content radio, include CREATE SCHEMA, output path under the dumps folder, overwrite). Then a job monitor that polls `/dump/jobs/{id}` and offers Download. Stored in `localStorage` `m2p.dump` without the password.
 - `components/result-grid.tsx` is the shared result table, used by both the migration console and the workbench.
 - A three-step wizard: Connect → Select → Migrate (`App.tsx`, controlled `Tabs`).
 - `Select` is enabled only after both connection tests succeed. Editing a connection resets its test state.

@@ -3,3 +3,5 @@ uvicorn[standard]>=0.32
 pymysql>=1.1
 psycopg[binary]>=3.2
 pydantic>=2.9
+oracledb>=2.5
+pymssql>=2.3

@@ -3,6 +3,7 @@ import { ThemeProvider, useTheme } from "next-themes"
 import {
   ArrowLeftIcon,
   ArrowRightLeftIcon,
+  FileDownIcon,
   TerminalSquareIcon,
   ArrowRightIcon,
   DatabaseZapIcon,
@@ -26,6 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Toaster } from "@/components/ui/sonner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { SchemaDumpPage } from "@/pages/schema-dump"
 import { WorkbenchPage } from "@/pages/workbench"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import {
@@ -394,9 +396,10 @@ function Migrator() {
   )
 }
 
-type Route = "migrate" | "workbench"
+type Route = "migrate" | "workbench" | "dump"
 
-const routeFromHash = (): Route => (window.location.hash.startsWith("#/workbench") ? "workbench" : "migrate")
+const routeFromHash = (): Route =>
+  window.location.hash.startsWith("#/workbench") ? "workbench" : window.location.hash.startsWith("#/dump") ? "dump" : "migrate"
 
 function Shell() {
   const [route, setRoute] = useState<Route>(routeFromHash)
@@ -409,6 +412,7 @@ function Shell() {
   const nav: { route: Route; href: string; label: string; icon: typeof DatabaseZapIcon }[] = [
     { route: "migrate", href: "#/", label: "Migrate", icon: ArrowRightLeftIcon },
     { route: "workbench", href: "#/workbench", label: "SQL Workbench", icon: TerminalSquareIcon },
+    { route: "dump", href: "#/dump", label: "Schema Dump", icon: FileDownIcon },
   ]
   const width = route === "workbench" ? "max-w-screen-2xl" : "max-w-6xl"
 
@@ -451,6 +455,9 @@ function Shell() {
         </div>
         <div hidden={route !== "workbench"}>
           <WorkbenchPage />
+        </div>
+        <div hidden={route !== "dump"}>
+          <SchemaDumpPage />
         </div>
       </main>
     </div>
